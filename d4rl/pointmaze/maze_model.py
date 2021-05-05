@@ -10,6 +10,7 @@ import random
 WALL = 10
 EMPTY = 11
 GOAL = 12
+START = 13
 
 
 def parse_maze(maze_str):
@@ -23,6 +24,8 @@ def parse_maze(maze_str):
                 maze_arr[w][h] = WALL
             elif tile == 'G':
                 maze_arr[w][h] = GOAL
+            elif tile == 'S':
+                maze_arr[w][h] = START
             elif tile == ' ' or tile == 'O' or tile == '0':
                 maze_arr[w][h] = EMPTY
             else:
@@ -56,7 +59,7 @@ def point_maze(maze_str):
     worldbody = mjcmodel.root.worldbody()
     worldbody.geom(name='ground',size="40 40 0.25",pos="0 0 -0.1",type="plane",contype=1,conaffinity=0,material="groundplane")
 
-    particle = worldbody.body(name='particle', pos=[1.2,1.2,0])
+    particle = worldbody.body(name='particle', pos=[1.,1.,0])
     particle.geom(name='particle_geom', type='sphere', size=0.1, rgba='0.0 0.0 1.0 0.0', contype=1)
     particle.site(name='particle_site', pos=[0.0,0.0,0], size=0.2, rgba='0.3 0.6 0.3 1')
     particle.joint(name='ball_x', type='slide', pos=[0,0,0], axis=[1,0,0])
@@ -84,7 +87,7 @@ def point_maze(maze_str):
 
 LARGE_MAZE = \
         "############\\"+\
-        "#OOOO#OOOOO#\\"+\
+        "#SOOO#OOOOO#\\"+\
         "#O##O#O#O#O#\\"+\
         "#OOOOOO#OOO#\\"+\
         "#O####O###O#\\"+\
@@ -95,7 +98,7 @@ LARGE_MAZE = \
 
 LARGE_MAZE_EVAL = \
         "############\\"+\
-        "#OO#OOO#OGO#\\"+\
+        "#SO#OOO#OGO#\\"+\
         "##O###O#O#O#\\"+\
         "#OO#O#OOOOO#\\"+\
         "#O##O#OO##O#\\"+\
@@ -106,7 +109,7 @@ LARGE_MAZE_EVAL = \
 
 MEDIUM_MAZE = \
         '########\\'+\
-        '#OO##OO#\\'+\
+        '#SO##OO#\\'+\
         '#OO#OOO#\\'+\
         '##OOO###\\'+\
         '#OO#OOO#\\'+\
@@ -121,7 +124,7 @@ MEDIUM_MAZE_EVAL = \
         '#OOOO#O#\\'+\
         '###OO###\\'+\
         '#OOOOOO#\\'+\
-        '#OO##OO#\\'+\
+        '#SO##OO#\\'+\
         "########"
 
 SMALL_MAZE = \
@@ -135,19 +138,19 @@ U_MAZE = \
         "#####\\"+\
         "#GOO#\\"+\
         "###O#\\"+\
-        "#OOO#\\"+\
+        "#SOO#\\"+\
         "#####"
 
 U_MAZE_EVAL = \
         "#####\\"+\
         "#OOG#\\"+\
         "#O###\\"+\
-        "#OOO#\\"+\
+        "#OOS#\\"+\
         "#####"
 
 OPEN = \
         "#######\\"+\
-        "#OOOOO#\\"+\
+        "#SOOOO#\\"+\
         "#OOGOO#\\"+\
         "#OOOOO#\\"+\
         "#######"
@@ -167,6 +170,15 @@ class MazeEnv(mujoco_env.MujocoEnv, utils.EzPickle, offline_env.OfflineEnv):
         self.reward_type = reward_type
         self.reset_locations = list(zip(*np.where(self.maze_arr == EMPTY)))
         self.reset_locations.sort()
+
+        self.start_locations = list(zip(*np.where(self.maze_arr == START)))
+        if len(self.start_locations) > 1:
+            raise ValueError("More than 1 start specified!")
+        self._start = self.start_locations[0]
+
+        self.visitation_map = np.zeros(self.maze_arr.shape)
+        self.visited_map = np.zeros(self.maze_arr.shape)
+        self.visited_map[self._start[0]][self._start[1]] = 1
 
         self._target = np.array([0.0,0.0])
 
@@ -200,6 +212,8 @@ class MazeEnv(mujoco_env.MujocoEnv, utils.EzPickle, offline_env.OfflineEnv):
         else:
             raise ValueError('Unknown reward type %s' % self.reward_type)
         done = False
+
+        self.update_visitation_map(observation=ob)
         return ob, reward, done, {}
 
     def _get_obs(self):
@@ -223,23 +237,27 @@ class MazeEnv(mujoco_env.MujocoEnv, utils.EzPickle, offline_env.OfflineEnv):
         self.set_state(self.sim.data.qpos, qvel)
 
     def reset_model(self):
-        idx = self.np_random.choice(len(self.empty_and_goal_locations))
-        reset_location = np.array(self.empty_and_goal_locations[idx]).astype(self.observation_space.dtype)
-        qpos = reset_location + self.np_random.uniform(low=-.1, high=.1, size=self.model.nq)
-        qvel = self.init_qvel + self.np_random.randn(self.model.nv) * .1
-        self.set_state(qpos, qvel)
+        reset_observation = self.reset_to_location(location=self._start)
+        self.update_visitation_map(observation=reset_observation)
         if self.reset_target:
             self.set_target()
-        return self._get_obs()
+        return reset_observation
 
     def reset_to_location(self, location):
-        self.sim.reset()
         reset_location = np.array(location).astype(self.observation_space.dtype)
         qpos = reset_location + self.np_random.uniform(low=-.1, high=.1, size=self.model.nq)
         qvel = self.init_qvel + self.np_random.randn(self.model.nv) * .1
         self.set_state(qpos, qvel)
         return self._get_obs()
 
+    def update_visitation_map(self, observation):
+        x_visited = round(observation[0])
+        y_visited = round(observation[1])
+        if x_visited != self._start[0] or y_visited != self._start[1]:
+            self.visitation_map[x_visited][y_visited] += 1
+            self.visited_map[x_visited][y_visited] = 1
+
     def viewer_setup(self):
         pass
+
 
